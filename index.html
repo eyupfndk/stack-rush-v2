@@ -33,6 +33,7 @@ const DIFF={
 let st='start',stack=[],cur=null,sc=0,cmb=0,best=+localStorage.getItem('sr2_best')||0;
 let camY=0,tCamY=0,parts=[],ftxts=[],sx=0,sy=0,sd=0,af=0;
 let falling=[];
+let reviveUsed=false,adTimer=0,adDur=180;
 
 function hue(i){return(i*25+10)%360}
 function bc(i){return`hsl(${hue(i)},72%,60%)`}
@@ -46,6 +47,7 @@ function init(){
   const bx=(W-IW)/2;
   stack=[{x:bx,w:IW,y:H-BH-50}];
   sc=0;cmb=0;camY=0;tCamY=0;parts=[];ftxts=[];falling=[];sx=0;sy=0;sd=0;
+  reviveUsed=false;
   spawn();
 }
 
@@ -65,11 +67,24 @@ function spawnCut(x,y,w,ci){
 
 function addFt(t,x,y,c,sz){ftxts.push({t,x,y,l:1,c,sz,sc:1.6})}
 
+function doGameOver(){
+  if(sc>best){best=sc;localStorage.setItem('sr2_best',best)}
+  if(!reviveUsed){st='ad';adTimer=adDur}
+  else{st='over'}
+}
+
+function revive(){
+  reviveUsed=true;st='playing';
+  const last=stack[stack.length-1];
+  last.w=Math.max(last.w,DIFF.minWidth+15);
+  spawn();
+}
+
 function place(){
   if(!cur)return;
   const t=stack[stack.length-1];
   const ol=Math.min(cur.x+cur.w,t.x+t.w)-Math.max(cur.x,t.x);
-  if(ol<=0){st='over';if(sc>best){best=sc;localStorage.setItem('sr2_best',best)};return}
+  if(ol<=0){doGameOver();return}
   const df=Math.abs(cur.x-t.x);
   
   if(df<=PT){
@@ -83,7 +98,7 @@ function place(){
   }else{
     cmb=0;sc+=1;
     const nx=Math.max(cur.x,t.x),nw=ol;
-    if(nw<MN){st='over';if(sc>best){best=sc;localStorage.setItem('sr2_best',best)};return}
+    if(nw<MN){doGameOver();return}
     stack.push({x:nx,w:nw,y:cur.y});
     
     const ci=stack.length-1;
@@ -103,6 +118,7 @@ function place(){
 
 function update(){
   af++;
+  if(st==='ad'){adTimer--;if(adTimer<=0)revive();return}
   if(st==='playing'&&cur){
     cur.x+=cur.sp*cur.d;
     if(cur.x+cur.w>W){cur.d=-1;cur.x=W-cur.w}
@@ -182,6 +198,18 @@ function draw(){
     cx.fillText('TAP TO START',W/2,H*.65);cx.globalAlpha=1;
   }
 
+  if(st==='ad'){
+    cx.fillStyle='rgba(15,15,30,0.92)';cx.fillRect(0,0,W,H);cx.textAlign='center';
+    cx.fillStyle='#fff';cx.font='bold 30px -apple-system,sans-serif';cx.fillText('SECOND CHANCE',W/2,H*.28);
+    cx.fillStyle='rgba(255,255,255,0.5)';cx.font='16px -apple-system,sans-serif';cx.fillText('Watch a short ad to continue',W/2,H*.34);
+    const pct=adTimer/adDur,r=40,cy2=H*.5;
+    cx.beginPath();cx.arc(W/2,cy2,r,0,Math.PI*2);cx.strokeStyle='rgba(255,255,255,0.15)';cx.lineWidth=5;cx.stroke();
+    cx.beginPath();cx.arc(W/2,cy2,r,-Math.PI/2,-Math.PI/2+(1-pct)*Math.PI*2);cx.strokeStyle='#4D96FF';cx.lineWidth=5;cx.stroke();
+    const sec=Math.ceil(adTimer/60);
+    cx.fillStyle='#fff';cx.font='bold 28px -apple-system,sans-serif';cx.fillText(sec,W/2,cy2+10);
+    cx.fillStyle='rgba(255,255,255,0.3)';cx.font='14px -apple-system,sans-serif';cx.fillText('Tap to skip →',W/2,H*.7);
+  }
+
   if(st==='over'){
     cx.fillStyle='rgba(15,15,30,0.9)';cx.fillRect(0,0,W,H);cx.textAlign='center';
     cx.fillStyle='#fff';cx.font='bold 38px -apple-system,sans-serif';cx.fillText('GAME OVER',W/2,H*.28);
@@ -201,6 +229,7 @@ function inp(e){
   e.preventDefault();
   if(st==='start'){st='playing';init()}
   else if(st==='playing')place();
+  else if(st==='ad')revive();
   else if(st==='over'){st='playing';init()}
 }
 cn.addEventListener('mousedown',inp);cn.addEventListener('touchstart',inp,{passive:false});
