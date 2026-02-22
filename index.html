@@ -17,28 +17,72 @@ const cn=document.getElementById('g'),cx=cn.getContext('2d');
 const MW=500,W=Math.min(innerWidth-16,MW),H=Math.min(innerHeight-16,720);
 cn.width=W;cn.height=H;
 
-const BH=26,IW=W*.44,PT=4,MN=5,BS=2.5,SI=0.18;
+const BH=26,IW=W*.44,PT=4,MN=5;
 const PAL=['#FF6B6B','#FFA07A','#FFD93D','#6BCB77','#4D96FF','#9B72FF','#FF6EB4','#45B7D1','#96E6A1','#DDA0DD'];
+
+// Difficulty settings
+const DIFF={
+  baseSpeed:1.4,       // start slow
+  speedInc:0.12,       // per tier
+  tierEvery:8,         // blocks per tier
+  maxSpeed:5.5,
+  shrinkPerTier:1.5,   // width shrink per tier
+  minWidth:W*.18       // minimum block width
+};
+
+// Power-up types
+const PUPS=[
+  {type:'slow',icon:'🐌',dur:180,desc:'SLOW MODE'},
+  {type:'wide',icon:'📏',dur:0,desc:'+WIDTH'},
+  {type:'magnet',icon:'🧲',dur:1,desc:'MAGNET'}
+];
 
 let st='start',stack=[],cur=null,sc=0,cmb=0,best=+localStorage.getItem('sr2_best')||0;
 let camY=0,tCamY=0,parts=[],ftxts=[],sx=0,sy=0,sd=0,af=0;
 let falling=[];
+
+// Second chance
+let hasRevive=true,reviveUsed=false,adTimer=0,adDur=180; // 3 sec at 60fps
+
+// Power-ups
+let activePup=null,pupTimer=0,nextPup=null;
+let pupOnBlock=null; // {type, icon} attached to current block
 
 function hue(i){return(i*25+10)%360}
 function bc(i){return`hsl(${hue(i)},72%,60%)`}
 function bd(i){return`hsl(${hue(i)},72%,48%)`}
 function bl(i){return`hsl(${hue(i)},72%,73%)`}
 
+function getTier(){return Math.floor((stack.length-1)/DIFF.tierEvery)}
+function getSpeed(){return Math.min(DIFF.baseSpeed+getTier()*DIFF.speedInc,DIFF.maxSpeed)}
+function getBaseWidth(){
+  const shrink=getTier()*DIFF.shrinkPerTier;
+  return Math.max(IW-shrink,DIFF.minWidth);
+}
+
 function init(){
   const bx=(W-IW)/2;
   stack=[{x:bx,w:IW,y:H-BH-50}];
   sc=0;cmb=0;camY=0;tCamY=0;parts=[];ftxts=[];falling=[];sx=0;sy=0;sd=0;
+  reviveUsed=false;hasRevive=true;
+  activePup=null;pupTimer=0;pupOnBlock=null;
   spawn();
 }
 
 function spawn(){
-  const t=stack[stack.length-1],sp=BS+Math.floor((stack.length-1)/10)*SI;
-  cur={x:-t.w,y:t.y-BH,w:t.w,d:1,sp};
+  const t=stack[stack.length-1];
+  const sp=getSpeed();
+  // Apply slow power-up
+  const actualSp=(activePup==='slow')?sp*0.45:sp;
+  const w=t.w; // inherit width from previous
+  cur={x:-w,y:t.y-BH,w,d:1,sp:actualSp};
+  
+  // Maybe spawn power-up on this block (15% chance after block 5)
+  pupOnBlock=null;
+  if(stack.length>5&&Math.random()<0.15){
+    const p=PUPS[~~(Math.random()*PUPS.length)];
+    pupOnBlock={type:p.type,icon:p.icon,desc:p.desc,dur:p.dur};
+  }
 }
 
 function spawnConf(x,y,w){
@@ -51,12 +95,52 @@ function spawnCut(x,y,w,ci){
 
 function addFt(t,x,y,c,sz){ftxts.push({t,x,y,l:1,c,sz,sc:1.6})}
 
+function activatePup(p){
+  if(p.type==='slow'){activePup='slow';pupTimer=p.dur}
+  else if(p.type==='wide'){
+    // Widen last block by 20px each side
+    const last=stack[stack.length-1];
+    const nw=Math.min(last.w+40,IW);
+    last.x-=(nw-last.w)/2;
+    last.x=Math.max(0,last.x);
+    last.w=Math.min(nw,W);
+  }
+  else if(p.type==='magnet'){activePup='magnet';pupTimer=1} // 1 block
+}
+
+function doGameOver(){
+  if(sc>best){best=sc;localStorage.setItem('sr2_best',best)}
+  if(hasRevive&&!reviveUsed&&sc>=5){
+    st='ad';adTimer=adDur;
+  }else{
+    st='over';
+  }
+}
+
+function revive(){
+  reviveUsed=true;hasRevive=false;
+  st='playing';
+  // Restore last block width a bit
+  const last=stack[stack.length-1];
+  last.w=Math.max(last.w,DIFF.minWidth+15);
+  spawn();
+}
+
 function place(){
   if(!cur)return;
   const t=stack[stack.length-1];
+  
+  // Magnet: auto-snap to perfect
+  if(activePup==='magnet'){
+    cur.x=t.x+(t.w-cur.w)/2;
+    activePup=null;pupTimer=0;
+  }
+  
   const ol=Math.min(cur.x+cur.w,t.x+t.w)-Math.max(cur.x,t.x);
-  if(ol<=0){st='over';if(sc>best){best=sc;localStorage.setItem('sr2_best',best)};return}
+  if(ol<=0){doGameOver();return}
   const df=Math.abs(cur.x-t.x);
+  
+  let gotPup=pupOnBlock;
   
   if(df<=PT){
     cmb++;sc+=3;
@@ -69,10 +153,9 @@ function place(){
   }else{
     cmb=0;sc+=1;
     const nx=Math.max(cur.x,t.x),nw=ol;
-    if(nw<MN){st='over';if(sc>best){best=sc;localStorage.setItem('sr2_best',best)};return}
+    if(nw<MN){doGameOver();return}
     stack.push({x:nx,w:nw,y:cur.y});
     
-    // Falling piece
     const ci=stack.length-1;
     const cutLeft=cur.x<t.x;
     const fx=cutLeft?cur.x:t.x+t.w;
@@ -83,6 +166,18 @@ function place(){
     sd=8;sx=(Math.random()-.5)*5;sy=(Math.random()-.5)*5;
   }
 
+  // Collect power-up
+  if(gotPup){
+    const last=stack[stack.length-1];
+    addFt(gotPup.icon+' '+gotPup.desc,last.x+last.w/2,last.y-20,'#00FFAA',22);
+    activatePup(gotPup);
+  }
+
+  // Decrease magnet timer if it was a block-based pup
+  if(activePup==='magnet'&&pupTimer>0){pupTimer--;if(pupTimer<=0)activePup=null}
+  
+  // Decrease slow timer handled in update
+
   const sTop=stack[stack.length-1].y;
   if(sTop<H*.4+camY)tCamY=H*.4-sTop+BH*2;
   spawn();
@@ -90,10 +185,23 @@ function place(){
 
 function update(){
   af++;
+  
+  if(st==='ad'){
+    adTimer--;
+    if(adTimer<=0)revive();
+    return;
+  }
+  
   if(st==='playing'&&cur){
     cur.x+=cur.sp*cur.d;
     if(cur.x+cur.w>W){cur.d=-1;cur.x=W-cur.w}
     if(cur.x<0){cur.d=1;cur.x=0}
+    
+    // Slow pup timer
+    if(activePup==='slow'){pupTimer--;if(pupTimer<=0){activePup=null;
+      // Update current block speed
+      if(cur)cur.sp=getSpeed();
+    }}
   }
   camY+=(tCamY-camY)*.07;
   if(sd>0){sd--;sx*=.65;sy*=.65}else{sx=0;sy=0}
@@ -120,23 +228,34 @@ function drawBlock(x,y,w,i,a){
 function draw(){
   cx.save();cx.translate(sx,sy);
   
-  // BG gradient
   const g=cx.createLinearGradient(0,0,0,H);
   g.addColorStop(0,'#1a1a2e');g.addColorStop(1,'#16213e');
   cx.fillStyle=g;cx.fillRect(-10,-10,W+20,H+20);
 
   cx.save();cx.translate(0,camY);
 
-  // Stack
   stack.forEach((b,i)=>drawBlock(b.x,b.y,b.w,i));
-
-  // Falling pieces
   falling.forEach(f=>drawBlock(f.x,f.y,f.w,f.ci,f.l));
 
-  // Current
+  // Current block
   if(cur&&st==='playing'){
     const i=stack.length;
     drawBlock(cur.x,cur.y,cur.w,i);
+    
+    // Power-up icon on block
+    if(pupOnBlock){
+      cx.font='18px -apple-system,sans-serif';cx.textAlign='center';
+      const bob=Math.sin(af*0.1)*3;
+      cx.fillText(pupOnBlock.icon,cur.x+cur.w/2,cur.y-6+bob);
+    }
+    
+    // Magnet indicator
+    if(activePup==='magnet'){
+      cx.strokeStyle='rgba(0,255,170,0.4)';cx.lineWidth=2;cx.setLineDash([3,3]);
+      const t=stack[stack.length-1];
+      rr(t.x-2,cur.y-2,t.w+4,BH+4,6);cx.stroke();cx.setLineDash([]);
+    }
+    
     // Guide lines
     const t=stack[stack.length-1];
     cx.strokeStyle='rgba(255,255,255,0.07)';cx.lineWidth=1;cx.setLineDash([4,4]);
@@ -144,11 +263,9 @@ function draw(){
     cx.moveTo(t.x+t.w,cur.y);cx.lineTo(t.x+t.w,cur.y+BH);cx.stroke();cx.setLineDash([]);
   }
 
-  // Particles
   parts.forEach(p=>{cx.globalAlpha=p.l;cx.fillStyle=p.c;cx.beginPath();cx.arc(p.x,p.y,p.s,0,Math.PI*2);cx.fill()});
   cx.globalAlpha=1;
 
-  // Float texts
   ftxts.forEach(t=>{
     cx.globalAlpha=t.l;cx.font=`bold ${~~(t.sz*t.sc)}px -apple-system,sans-serif`;cx.textAlign='center';
     cx.strokeStyle='rgba(0,0,0,0.5)';cx.lineWidth=3;cx.strokeText(t.t,t.x,t.y);
@@ -162,10 +279,35 @@ function draw(){
   if(st==='playing'){
     cx.fillStyle='#fff';cx.font='bold 34px -apple-system,sans-serif';cx.textAlign='left';cx.fillText(sc,20,46);
     cx.fillStyle='rgba(255,255,255,0.4)';cx.font='13px -apple-system,sans-serif';cx.fillText(`Best: ${best}`,20,66);
+    
+    // Tier indicator
+    const tier=getTier();
+    if(tier>0){
+      cx.fillStyle='rgba(255,255,255,0.25)';cx.font='12px -apple-system,sans-serif';cx.textAlign='left';
+      cx.fillText(`Level ${tier+1}`,20,82);
+    }
+    
     if(cmb>1){cx.fillStyle='#FF6B6B';cx.font='bold 22px -apple-system,sans-serif';cx.textAlign='right';cx.fillText(`🔥 x${cmb}`,W-20,46)}
+    
+    // Active power-up indicator
+    if(activePup==='slow'){
+      const pct=pupTimer/180;
+      cx.fillStyle='rgba(0,0,0,0.4)';rr(W-70,56,55,22,8);cx.fill();
+      cx.fillStyle='#00FFAA';cx.font='14px -apple-system,sans-serif';cx.textAlign='right';
+      cx.fillText('🐌',W-52,73);
+      // Bar
+      cx.fillStyle='rgba(0,255,170,0.3)';rr(W-48,62,36,10,4);cx.fill();
+      cx.fillStyle='#00FFAA';rr(W-48,62,36*pct,10,4);cx.fill();
+    }
+    
+    // Revive available indicator
+    if(hasRevive&&!reviveUsed){
+      cx.fillStyle='rgba(255,255,255,0.15)';cx.font='11px -apple-system,sans-serif';cx.textAlign='right';
+      cx.fillText('❤️ 1',W-20,H-15);
+    }
   }
 
-  // Start
+  // Start screen
   if(st==='start'){
     cx.fillStyle='rgba(15,15,30,0.88)';cx.fillRect(0,0,W,H);cx.textAlign='center';
     cx.fillStyle='#fff';cx.font='bold 52px -apple-system,sans-serif';cx.fillText('STACK',W/2,H*.3);
@@ -176,7 +318,24 @@ function draw(){
     cx.fillText('TAP TO START',W/2,H*.65);cx.globalAlpha=1;
   }
 
-  // Over
+  // Ad / Revive screen
+  if(st==='ad'){
+    cx.fillStyle='rgba(15,15,30,0.92)';cx.fillRect(0,0,W,H);cx.textAlign='center';
+    cx.fillStyle='#fff';cx.font='bold 30px -apple-system,sans-serif';cx.fillText('SECOND CHANCE',W/2,H*.28);
+    cx.fillStyle='rgba(255,255,255,0.5)';cx.font='16px -apple-system,sans-serif';cx.fillText('Watch a short ad to continue',W/2,H*.34);
+    
+    // Timer circle
+    const pct=adTimer/adDur;
+    const r=40;const cy2=H*.5;
+    cx.beginPath();cx.arc(W/2,cy2,r,0,Math.PI*2);cx.strokeStyle='rgba(255,255,255,0.15)';cx.lineWidth=5;cx.stroke();
+    cx.beginPath();cx.arc(W/2,cy2,r,-Math.PI/2,-Math.PI/2+(1-pct)*Math.PI*2);cx.strokeStyle='#4D96FF';cx.lineWidth=5;cx.stroke();
+    const sec=Math.ceil(adTimer/60);
+    cx.fillStyle='#fff';cx.font='bold 28px -apple-system,sans-serif';cx.fillText(sec,W/2,cy2+10);
+    
+    cx.fillStyle='rgba(255,255,255,0.3)';cx.font='14px -apple-system,sans-serif';cx.fillText('Tap to skip →',W/2,H*.7);
+  }
+
+  // Game over
   if(st==='over'){
     cx.fillStyle='rgba(15,15,30,0.9)';cx.fillRect(0,0,W,H);cx.textAlign='center';
     cx.fillStyle='#fff';cx.font='bold 38px -apple-system,sans-serif';cx.fillText('GAME OVER',W/2,H*.28);
@@ -192,7 +351,13 @@ function draw(){
   cx.restore();
 }
 
-function inp(e){e.preventDefault();if(st==='start'){st='playing';init()}else if(st==='playing')place();else if(st==='over'){st='playing';init()}}
+function inp(e){
+  e.preventDefault();
+  if(st==='start'){st='playing';init()}
+  else if(st==='playing')place();
+  else if(st==='ad')revive(); // skip ad = revive immediately
+  else if(st==='over'){st='playing';init()}
+}
 cn.addEventListener('mousedown',inp);cn.addEventListener('touchstart',inp,{passive:false});
 document.addEventListener('keydown',e=>{if(e.code==='Space')inp(e)});
 
